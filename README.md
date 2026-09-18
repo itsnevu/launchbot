@@ -5,7 +5,7 @@ Satu bot, dua platform. User kirim private key → isi detail token → bot laun
 | | pons v2 | Argus |
 |---|---|---|
 | Chain | Robinhood Chain, chainId **4663** | Arc (Circle L1), chainId **5042** |
-| Gas / dev buy | ETH | USDC (native == ERC-20 `0x3600…0000`) |
+| Gas / dev buy | ETH; dev buy bisa pakai pair ERC-20 (USDG, cbBTC, saham tokenized) | USDC (native == ERC-20 `0x3600…0000`); quote alternatif ARGUS |
 | Kontrak | Factory `0x7eD5…EC7e`, Router `0xe33E…2948` | Portal #7 `0xB021…97Da` |
 | Fee launch | 0.0005 ETH | 0 (gas ≈ 0.06 USDC) |
 | Mekanisme | Bonding curve → auto-graduate ke Uniswap v4 @ 4.2 ETH | Langsung pool Uniswap v4 (full supply di 1 posisi), liquidity locked selamanya |
@@ -24,17 +24,21 @@ npm test               # unit test offline: encoding vs calldata nyata, validasi
 npm start
 ```
 
-VPS persisten:
+VPS persisten (Ubuntu, dari laptop — upload kode + `.env`, pasang Node 22 + pm2, start 24 jam):
 
 ```bash
-npm i -g pm2 && pm2 start src/index.js --name launch-bot && pm2 save && pm2 startup
+bash scripts/deploy.sh root@IP_VPS   # password ditanya 2x; ulangi perintah yang sama untuk update
 ```
+
+Manual di VPS: `npm i -g pm2 && pm2 start src/index.js --name launch-bot && pm2 save && pm2 startup`.
 
 ## Alur di Telegram
 
 `/start` → pilih platform (tombol) → kirim private key (pesan langsung dihapus) → nama, symbol, deskripsi, logo (URL atau **kirim foto**), website/X/TG (pons: + Discord/Farcaster) → tax (tombol preset atau ketik bps) → (pons) wallet bebas snipe tax → dev buy → layar **konfirmasi** dengan saldo vs kebutuhan + estimasi tokensOut.
 
 Di konfirmasi: **🚀 LAUNCH** · **🔎 Simulasi** (mining + simulasi + estimasi gas, tanpa kirim tx) · **✏️ Ubah** (perbaiki satu field tanpa kirim key ulang) · **✖️ Batal**.
+
+`/manage` — kelola token yang sudah launch: pilih platform → kirim key → alamat token (atau pilih dari riwayat) → layar **status** (saldo, progres curve/graduasi, fee creator siap klaim) dengan tombol **Jual 25/50/100%**, **Klaim fee**, **Refresh**. Key tetap di memori selama menu terbuka (kena TTL idle juga); **Selesai** menghapusnya.
 
 `/history` — 10 launch terakhir kamu (disimpan di `launches.jsonl`, tanpa key). `/cancel` kapan saja menghapus key dari memori.
 
@@ -49,6 +53,9 @@ Bot hanya melayani **chat pribadi**; di grup semua perintah ditolak (key tidak b
 2. Baca `launchFee()` + `previewLaunchEconomics(0, 0x0)` tepat sebelum kirim (pin terms).
 3. `launchAndBuy.staticCall` → dapat `token`, `curve`, `tokensOut` → `minTokensOut = tokensOut − SLIPPAGE_BPS`.
 4. Estimasi gas (+25%), cek saldo, kirim, tunggu receipt. Tanpa dev buy → `factory.launchToken`.
+5. Hasil dari event: factory `TokenLaunched` (token, curve) + router `0xdcacba…` (tokensOut riil).
+6. **Pair ERC-20** (`approvedPairTokens`, mis. USDG 6 des, cbBTC 8 des, NVDA/TSLA/… 18 des): `value` = fee saja, dev buy di-approve ke router lalu ditarik via `transferFrom`; `previewLaunchEconomics` & `graduationThreshold` berbeda per pair. Alamat non-preset dicek on-chain saat diketik.
+7. **Pasca-launch**: `curve.sell(tokensIn, minQuoteOut, recipient)` (approve token → curve; quote dari `staticCall` − slippage; hanya sebelum `graduated()`). Fee creator: `curve.sweepFees(0)` (permissionless) mengirim fee ke escrow `0xd3AF…Ac9e` (`credit(creator)`), lalu `escrow.claim()`; `escrow.balanceOf(creator)` = siap klaim. Selector diverifikasi dari bytecode + tx nyata 2026-09-19.
 
 **Argus** ([src/chains/argus.js](src/chains/argus.js)) — ABI Portal tidak dipublikasikan (bundle `arguspad.io` di balik browser-check), jadi layout direkonstruksi dari calldata 40+ tx launch nyata dan diverifikasi via dry-run:
 1. `createLaunch` = selector `0x11b8f0f1` + `(struct1, struct2, bytes32 tokenSalt, bytes32 hookSalt)`.
@@ -59,6 +66,8 @@ Bot hanya melayani **chat pribadi**; di grup semua perintah ditolak (key tidak b
 4. Dev buy > 0 → `approve(USDC → Portal)` kalau allowance kurang.
 5. Dry-run `eth_call` (dapat alamat token), `eth_estimateGas` (+20%), kirim, parse event `TokenCreated` / `PartsDeployed` / dev-buy dari receipt.
 6. Estimasi tokensOut dev buy (ditampilkan di konfirmasi): dev buy = trade pertama di pool yang mulai di startMcap 2500 USDC dengan seluruh supply → constant product − fee pool 0.25% − buy tax. Dicocokkan dengan 3 tx nyata, selisih < 0.1%.
+7. **Quote ARGUS** (`0xeCe5…cb3c`, 18 des): encoding sama, `quoteAsset` = ARGUS, dev buy di-approve dari saldo ARGUS (gas tetap USDC). Portal tidak memvalidasi startMcap/bondMcap — frontend mengisinya dari harga live: `startMcap = 2500 / harga`, `bondMcap = 18 × startMcap` (dicek dari 14 tx nyata, rasio selalu 18). Bot membaca harga dari pool Uniswap v4 USDC/ARGUS via `StateView.getSlot0` (PoolKey default fee 9850 / tickSpacing 99 / tanpa hook = pool likuiditas terbesar 2026-09-19; override `ARGUS_PRICE_POOL=fee,tickSpacing,hook`).
+8. **Pasca-launch**: `Portal.launches(token)` → creator, hook, splitter, quote. Fee creator dikumpulkan keeper Argus ke splitter per token; `splitter.0x46474a93(creator)` = siap klaim, `splitter.claim(creator)` (`0x1e83409a`) mengirimnya ke wallet creator (keeper Argus juga memanggil ini berkala via multicall, jadi biasanya sudah otomatis masuk). **Jual** lewat router frontend `0x53dE…4827` selector `0x4d819a2a` (layout direkonstruksi dari tx buy/sell nyata: Step{kind 2, tokenIn, tokenOut (0x0 = USDC native), 0, fee 10000, tickSpacing 200, hook, hookData, poolManager, 0}, amountIn, minOut, deadline 0). Router tidak mengembalikan data → quote dicari dengan binary search `eth_call` pada `minOut` (≈ 15–20 call), lalu `minOut = quote − slippage`.
 
 Saat startup, bot menjalankan `selfCheck()` tiap platform (RPC, chainId, kontrak punya kode, Portal masih punya selector `0x11b8f0f1`/`0x3ae04f1d`). Gagal → platform itu ditandai ⚠️ dan launch ditolak sampai check lolos (dicoba ulang saat dipilih).
 
@@ -87,11 +96,11 @@ Saat startup, bot menjalankan `selfCheck()` tiap platform (RPC, chainId, kontrak
 | [src/rpc.js](src/rpc.js) | DNS pin, raw RPC fallback, retry, `waitTx` (timeout ≠ revert) |
 | [src/history.js](src/history.js), [src/ipfs.js](src/ipfs.js) | riwayat JSONL; upload foto → Pinata |
 | [test/](test/) | `npm test` — tanpa network |
+| [scripts/deploy.sh](scripts/deploy.sh) | deploy/update ke VPS via ssh+scp (Node 22, pm2) |
 | [scripts/build-miner.js](scripts/build-miner.js) | compile ulang `HookSaltMiner.sol` → json (`npm i -D solc`; `--check` membandingkan bytecode) |
 
-## Yang belum
+## Batasan
 
-- Argus: launch dengan quote selain USDC (ARGUS) — encoding sama, hanya `quoteAsset` + approve yang beda; belum diuji.
-- pons: pair ERC-20 selain ETH (`approvedPairTokens`) belum diimplementasi.
-- pons: `tokensOut` di hasil masih dari `staticCall` (ABI event curve tidak diketahui); Argus sudah dari event.
-- Aksi pasca-launch (jual, klaim fee creator, status graduasi) belum ada.
+- pons: setelah **graduate** ke Uniswap v4, curve tutup — bot hanya menampilkan status; jual lewat pons UI/DEX. Escrow fee creator diverifikasi untuk pair ETH; untuk pair ERC-20, `escrow.balanceOf` mungkin tidak mencakup fee ERC-20 (belum ada sampel tx).
+- Argus: layout router jual & startMcap ARGUS hasil reverse-engineering; jual selalu disimulasikan dulu (revert = tidak kirim). Token dengan quote ARGUS dijual ke ARGUS (tokenOut = ARGUS), jalur ini belum punya sampel tx nyata.
+- Launch quote ARGUS + jual/klaim Argus & pons diverifikasi lewat dry-run/eth_call terhadap kontrak & token nyata, bukan tx berbayar.

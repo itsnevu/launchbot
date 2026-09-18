@@ -43,11 +43,48 @@ const ERC20_ABI = [
   "function balanceOf(address) view returns (uint256)",
   "function allowance(address,address) view returns (uint256)",
   "function approve(address,uint256) returns (bool)",
+  "function symbol() view returns (string)",
 ];
+const STATEVIEW_ABI = ["function getSlot0(bytes32) view returns (uint160 sqrtPriceX96,int24 tick,uint24 protocolFee,uint24 lpFee)"];
+// Portal.launches(token) → (creator, tickLower, ?, locker, hook, splitter, buyTax, sellTax, ?, tick, quote) — layout dari eth_call nyata.
+const LAUNCHES_SELECTOR = "0x1f2d8550";
+// Splitter (per token): claim(address creator) = 0x1e83409a (dipanggil keeper Argus via multicall, permissionless),
+// claimable(address) = 0x46474a93 (nilai sebelum klaim == jumlah USDC yang ditransfer ke creator).
+const SPLITTER_CLAIM = "0x1e83409a";
+const SPLITTER_CLAIMABLE = "0x46474a93";
+// Router swap frontend (0x53dea4…): swap(Step[] steps, uint256 ?, uint256 amountIn, uint256 minOut, uint256 deadline)
+// Step = (uint256 kind=2, address tokenIn, address tokenOut, uint256 0, uint24 fee, int24 tickSpacing, address hook, bytes hookData, address poolManager, uint256 0)
+// Layout direkonstruksi dari tx buy & sell nyata (2026-09-19). Router tidak mengembalikan data → quote via simulasi minOut (binary search).
+const SWAP_SELECTOR = "0x4d819a2a";
+const STEP_T = "tuple(uint256 kind,address tokenIn,address tokenOut,uint256 zero,uint256 fee,uint256 tickSpacing,address hook,bytes hookData,address poolManager,uint256 zero2)";
+const POOL_FEE = 10000n, TICK_SPACING = 200n; // dari event Initialize pool launch Argus (fee 1%, tickSpacing 200)
+const fmtNum = (s, max = 4) => Number(s).toLocaleString("en-US", { maximumFractionDigits: max });
+
+// Harga ARGUS dalam USDC dari pool Uniswap v4 USDC/ARGUS (StateView.getSlot0). Dipakai untuk startMcap/bondMcap launch quote ARGUS.
+export async function argusPriceUsdc(provider) {
+  const [fee, ts, hook] = C.pricePool;
+  const key = coder.encode(["address", "address", "uint24", "int24", "address"], [C.usdc, C.argusToken, fee, ts, hook]);
+  const poolId = ethers.keccak256(key);
+  const sv = new ethers.Contract(C.stateView, STATEVIEW_ABI, provider);
+  const s = await withRetry(() => sv.getSlot0(poolId), { label: "getSlot0" });
+  if (s.sqrtPriceX96 === 0n) throw new Error("Pool harga USDC/ARGUS tidak terinisialisasi (cek ARGUS_PRICE_POOL).");
+  // price = token1/token0 = ARGUS_wei per USDC_unit(6 des) → USDC per ARGUS = 1/price × 1e12
+  const p = (Number(s.sqrtPriceX96) / 2 ** 96) ** 2;
+  return 1e12 / p;
+}
+
+// Quote info: USDC (default) atau ARGUS.
+async function quoteInfo(provider, data) {
+  if ((data.quote || "USDC").toUpperCase() !== "ARGUS") return { address: C.usdc, symbol: "USDC", decimals: 6, native: true, startMcap: C.startMcap, bondMcap: C.bondMcap };
+  const price = await argusPriceUsdc(provider);
+  // startMcap ARGUS = 2500 USDC / harga; bondMcap = 18 × startMcap (rasio sama dengan USDC: 45000/2500), seperti frontend.
+  const startMcap = ethers.parseUnits((2500 / price).toFixed(18), 18);
+  return { address: C.argusToken, symbol: "ARGUS", decimals: 18, native: false, startMcap, bondMcap: startMcap * 18n, price };
+}
 
 // Mining hookSalt: 1 eth_call (state override) = ~900 iterasi (cap 30M gas), paralel di semua RPC.
 // Rata-rata butuh ~16k percobaan (1/16384) → biasanya < 2 detik.
-async function mineHookSalt(rpc, creator, tokenSalt, buyTax, sellTax, onStatus) {
+async function mineHookSalt(rpc, creator, tokenSalt, buyTax, sellTax, quote, onStatus) {
   const iface = new ethers.Interface(MINER.abi);
   const PER_CALL = 900;
   const PAR = Math.max(3, C.rpcUrls.length * 2);
@@ -56,7 +93,7 @@ async function mineHookSalt(rpc, creator, tokenSalt, buyTax, sellTax, onStatus) 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const jobs = Array.from({ length: PAR }, () => {
       const data = iface.encodeFunctionData("mine", [
-        C.portal, creator, tokenSalt, ethers.hexlify(ethers.randomBytes(32)), buyTax, sellTax, C.usdc, PER_CALL,
+        C.portal, creator, tokenSalt, ethers.hexlify(ethers.randomBytes(32)), buyTax, sellTax, quote, PER_CALL,
       ]);
       return rpc(
         "eth_call",
@@ -74,14 +111,14 @@ async function mineHookSalt(rpc, creator, tokenSalt, buyTax, sellTax, onStatus) 
     }
     if (results.every((r) => r === null)) {
       // state override tidak didukung / semua gagal → fallback batch eth_call biasa
-      return mineHookSaltBatch(rpc, creator, tokenSalt, buyTax, sellTax, onStatus);
+      return mineHookSaltBatch(rpc, creator, tokenSalt, buyTax, sellTax, quote, onStatus);
     }
     if (round % 3 === 2) await onStatus(`⛏️ Mining hook salt... ${tried} percobaan`);
   }
   throw new Error("Mining hook salt gagal (RPC tidak stabil). Coba lagi.");
 }
 
-async function mineHookSaltBatch(rpc, creator, tokenSalt, buyTax, sellTax, onStatus) {
+async function mineHookSaltBatch(rpc, creator, tokenSalt, buyTax, sellTax, quote, onStatus) {
   const N = 150;
   for (let round = 0; round < 400; round++) {
     const salts = Array.from({ length: N }, () => ethers.hexlify(ethers.randomBytes(32)));
@@ -91,7 +128,7 @@ async function mineHookSaltBatch(rpc, creator, tokenSalt, buyTax, sellTax, onSta
         to: C.portal,
         data: PREDICT_SELECTOR + coder.encode(
           ["address", "bytes32", "bytes32", "uint16", "uint16", "address"],
-          [creator, tokenSalt, s, buyTax, sellTax, C.usdc]
+          [creator, tokenSalt, s, buyTax, sellTax, quote]
         ).slice(2),
       }, "latest"],
     }));
@@ -119,10 +156,10 @@ async function mineHookSaltBatch(rpc, creator, tokenSalt, buyTax, sellTax, onSta
 // Estimasi tokensOut dev buy. Dev buy = trade PERTAMA di pool (atomik dalam tx launch), pool mulai di
 // startMcap dengan seluruh supply → constant product: reserve virtual quote = startMcap.
 // Dicek vs 3 tx nyata (4 / 450 / 0.002 USDC): selisih < 0.1%.
-export function estimateDevBuy(devBuyUsdc6, buyTaxBps) {
+export function estimateDevBuy(devBuyUsdc6, buyTaxBps, startMcap = C.startMcap) {
   if (devBuyUsdc6 <= 0n) return 0n;
   const xIn = (devBuyUsdc6 * (10_000n - POOL_FEE_BPS)) / 10_000n;
-  const gross = (C.totalSupply * xIn) / (C.startMcap + xIn);
+  const gross = (C.totalSupply * xIn) / (startMcap + xIn);
   return (gross * (10_000n - BigInt(buyTaxBps))) / 10_000n;
 }
 
@@ -161,14 +198,21 @@ export const argus = {
 
   // Saldo vs kebutuhan + estimasi tokensOut, ditampilkan di layar konfirmasi.
   async precheck(wallet, data) {
+    const q = await quoteInfo(wallet.provider, data);
     const bal = await withRetry(() => wallet.provider.getBalance(wallet.address), { label: "precheck" });
-    const devBuy = data.devBuy && Number(data.devBuy) > 0 ? ethers.parseUnits(String(data.devBuy), 6) : 0n;
-    const need = (devBuy + GAS_RESERVE_USDC) * 10n ** 12n;
-    const est = estimateDevBuy(devBuy, Number(data.buyTaxBps || 0));
+    const devBuy = data.devBuy && Number(data.devBuy) > 0 ? ethers.parseUnits(String(data.devBuy), q.decimals) : 0n;
+    const est = estimateDevBuy(devBuy, Number(data.buyTaxBps || 0), q.startMcap);
+    const estText = devBuy > 0n ? `\nEstimasi dev buy: ≈ ${fmtNum(ethers.formatEther(est), 0)} ${data.symbol} (${(Number(est) / Number(C.totalSupply) * 100).toFixed(2)}% supply)` : "";
+    if (q.native) {
+      const need = (devBuy + GAS_RESERVE_USDC) * 10n ** 12n;
+      return { ok: bal >= need, text: `Saldo: ${ethers.formatUnits(bal, 18)} USDC | Butuh ≈ ${ethers.formatUnits(need, 18)} USDC (dev buy + gas)` + estText };
+    }
+    const abal = await withRetry(() => new ethers.Contract(q.address, ERC20_ABI, wallet.provider).balanceOf(wallet.address), { label: "argusBalance" });
+    const needUsdc = GAS_RESERVE_USDC * 10n ** 12n;
     return {
-      ok: bal >= need,
-      text: `Saldo: ${ethers.formatUnits(bal, 18)} USDC | Butuh ≈ ${ethers.formatUnits(need, 18)} USDC (dev buy + gas)` +
-        (devBuy > 0n ? `\nEstimasi dev buy: ≈ ${Number(ethers.formatEther(est)).toLocaleString("en-US", { maximumFractionDigits: 0 })} ${data.symbol} (${(Number(est) / Number(C.totalSupply) * 100).toFixed(2)}% supply)` : ""),
+      ok: bal >= needUsdc && abal >= devBuy,
+      text: `Saldo: ${ethers.formatUnits(bal, 18)} USDC, ${fmtNum(ethers.formatEther(abal), 2)} ARGUS | Butuh ≈ ${ethers.formatUnits(needUsdc, 18)} USDC gas + ${fmtNum(ethers.formatEther(devBuy), 2)} ARGUS dev buy\n` +
+        `Harga ARGUS ≈ ${q.price.toFixed(6)} USDC → startMcap ${fmtNum(ethers.formatEther(q.startMcap), 0)} ARGUS (≈ 2.500 USDC), bond ${fmtNum(ethers.formatEther(q.bondMcap), 0)} ARGUS` + estText,
     };
   },
 
@@ -188,20 +232,25 @@ export const argus = {
       throw new Error("Alokasi harus total 10000 bps (100%).");
     }
 
-    const devBuy = data.devBuy && Number(data.devBuy) > 0 ? ethers.parseUnits(String(data.devBuy), 6) : 0n;
-    const usdc = new ethers.Contract(C.usdc, ERC20_ABI, wallet);
+    const q = await quoteInfo(provider, data);
+    const devBuy = data.devBuy && Number(data.devBuy) > 0 ? ethers.parseUnits(String(data.devBuy), q.decimals) : 0n;
+    const quoteC = new ethers.Contract(q.address, ERC20_ABI, wallet); // USDC atau ARGUS
 
-    // saldo: native (18 des) == ERC-20 (6 des), satu dana untuk gas + dev buy
+    // saldo: USDC native (18 des) == ERC-20 (6 des), satu dana untuk gas + dev buy. Quote ARGUS: gas tetap USDC, dev buy dari saldo ARGUS.
     const bal = await withRetry(() => provider.getBalance(wallet.address), { label: "getBalance" });
-    const devBuy18 = devBuy * 10n ** 12n;
+    const devBuy18 = q.native ? devBuy * 10n ** 12n : 0n; // porsi dev buy yang keluar dari saldo native
     if (bal < devBuy18) {
       throw new Error(`Saldo USDC kurang. Dev buy ${ethers.formatUnits(devBuy, 6)} USDC, ada ${ethers.formatUnits(bal, 18)} USDC.`);
+    }
+    if (!q.native && devBuy > 0n) {
+      const abal = await withRetry(() => quoteC.balanceOf(wallet.address), { label: "argusBalance" });
+      if (abal < devBuy) throw new Error(`Saldo ARGUS kurang. Dev buy ${ethers.formatEther(devBuy)} ARGUS, ada ${ethers.formatEther(abal)} ARGUS.`);
     }
 
     // salts
     const tokenSalt = ethers.hexlify(ethers.randomBytes(32));
     await onStatus("⛏️ Mining hook salt (alamat hook Uniswap v4 wajib punya flag 0x2044)...");
-    const mined = await mineHookSalt(rpc, wallet.address, tokenSalt, buyTax, sellTax, onStatus);
+    const mined = await mineHookSalt(rpc, wallet.address, tokenSalt, buyTax, sellTax, q.address, onStatus);
     await onStatus(`✅ Hook salt ketemu (${mined.tried} percobaan). Hook: ${mined.hook}`);
 
     // dividends > 0 → creator wajib terdaftar di registry (mode 1)
@@ -215,23 +264,23 @@ export const argus = {
       }
     }
 
-    // approve USDC → Portal untuk dev buy (Portal tarik via transferFrom)
+    // approve quote → Portal untuk dev buy (Portal tarik via transferFrom)
     if (devBuy > 0n && !dryRun) {
-      const allowance = await withRetry(() => usdc.allowance(wallet.address, C.portal), { label: "allowance" });
+      const allowance = await withRetry(() => quoteC.allowance(wallet.address, C.portal), { label: "allowance" });
       if (allowance < devBuy) {
-        await onStatus(`🔏 Approve ${ethers.formatUnits(devBuy, 6)} USDC ke Portal...`);
-        const atx = await usdc.approve(C.portal, devBuy);
-        await waitTx(atx, { timeoutMs: 120_000, label: "Approve USDC" });
+        await onStatus(`🔏 Approve ${ethers.formatUnits(devBuy, q.decimals)} ${q.symbol} ke Portal...`);
+        const atx = await quoteC.approve(C.portal, devBuy);
+        await waitTx(atx, { timeoutMs: 120_000, label: `Approve ${q.symbol}` });
       }
     }
 
     const p1 = {
       name: data.name, symbol: data.symbol,
-      totalSupply: C.totalSupply, startMcap: C.startMcap, bondMcap: C.bondMcap,
+      totalSupply: C.totalSupply, startMcap: q.startMcap, bondMcap: q.bondMcap,
       buyTaxBps: buyTax, sellTaxBps: sellTax,
       creatorFundsBps: alloc.creatorFunds, buybackBurnBps: alloc.buybackBurn,
       dividendsBps: alloc.dividends, liquidityBps: alloc.liquidity,
-      devBuyAmount: devBuy, quoteAsset: C.usdc, flag: C.launchFlag,
+      devBuyAmount: devBuy, quoteAsset: q.address, flag: C.launchFlag,
     };
     const p2 = {
       imageURI: data.logo || "",
@@ -245,10 +294,10 @@ export const argus = {
     // dryRun tanpa allowance cukup → simulasikan dengan devBuy 0 supaya tidak revert di transferFrom
     let simCalldata = calldata, simNote = "";
     if (dryRun && devBuy > 0n) {
-      const allowance = await withRetry(() => usdc.allowance(wallet.address, C.portal), { label: "allowance" });
+      const allowance = await withRetry(() => quoteC.allowance(wallet.address, C.portal), { label: "allowance" });
       if (allowance < devBuy) {
         simCalldata = CREATE_SELECTOR + coder.encode(CREATE_TYPES, [{ ...p1, devBuyAmount: 0n }, p2, tokenSalt, mined.hookSalt]).slice(2);
-        simNote = "Simulasi tanpa dev buy (USDC belum di-approve; approve terjadi saat launch nyata). ";
+        simNote = `Simulasi tanpa dev buy (${q.symbol} belum di-approve; approve terjadi saat launch nyata). `;
       }
     }
     await onStatus("🔎 Simulasi createLaunch...");
@@ -272,14 +321,14 @@ export const argus = {
 
     const base = {
       token: predictedToken, hook: mined.hook, locker: "", splitter: "", poolId: "",
-      tokensOut: ethers.formatEther(estimateDevBuy(devBuy, buyTax)),
-      devBuy: ethers.formatUnits(devBuy, 6), fee: "0",
+      tokensOut: ethers.formatEther(estimateDevBuy(devBuy, buyTax, q.startMcap)),
+      devBuy: ethers.formatUnits(devBuy, q.decimals), devBuySymbol: q.symbol, fee: "0",
       gas: gas.toString(), gasCost: ethers.formatUnits(gasCost, 18), totalCost: ethers.formatUnits(devBuy18 + gasCost, 18),
       links: { token: `https://argus.world/token/${predictedToken}`, explorerToken: `${C.explorer}/token/${predictedToken}` },
     };
     if (dryRun) return { ...base, dryRun: true, note: simNote + "tokensOut = estimasi. Alamat token akan berbeda saat launch nyata (salt baru)." };
 
-    await onStatus(`📤 Mengirim tx (gas ~${gas}, biaya gas ~${ethers.formatUnits(gasCost, 18)} USDC, dev buy ${ethers.formatUnits(devBuy, 6)} USDC)...`);
+    await onStatus(`📤 Mengirim tx (gas ~${gas}, biaya gas ~${ethers.formatUnits(gasCost, 18)} USDC, dev buy ${ethers.formatUnits(devBuy, q.decimals)} ${q.symbol})...`);
     const feeOpts = feeData.maxFeePerGas
       ? { maxFeePerGas: feeData.maxFeePerGas, maxPriorityFeePerGas: feeData.maxPriorityFeePerGas ?? 0n }
       : { gasPrice };
@@ -312,5 +361,95 @@ export const argus = {
         explorerToken: `${C.explorer}/token/${token}`,
       },
     };
+  },
+
+  // ---------------- pasca-launch ----------------
+  // Portal.launches(token) → creator, hook, splitter, quote.
+  async launchInfo(provider, tokenAddr) {
+    const rpc = rawRpc(C.rpcUrls);
+    const raw = await rpc("eth_call", [{ to: C.portal, data: LAUNCHES_SELECTOR + coder.encode(["address"], [tokenAddr]).slice(2) }, "latest"]);
+    const w = raw.slice(2).match(/.{64}/g) || [];
+    if (w.length < 11 || /^0+$/.test(w[0])) throw new Error("Token ini bukan launch Argus Portal #7 (launches() kosong).");
+    const addr = (i) => ethers.getAddress("0x" + w[i].slice(24));
+    return { creator: addr(0), locker: addr(3), hook: addr(4), splitter: addr(5), buyTax: parseInt(w[6], 16), sellTax: parseInt(w[7], 16), quote: addr(10) };
+  },
+
+  async status(wallet, tokenAddr) {
+    const provider = wallet.provider;
+    const info = await this.launchInfo(provider, tokenAddr);
+    const token = new ethers.Contract(tokenAddr, ERC20_ABI, provider);
+    const q = info.quote.toLowerCase() === C.usdc ? { symbol: "USDC", decimals: 6 } : { symbol: "ARGUS", decimals: 18 };
+    const [symbol, bal, claimRaw] = await withRetry(() => Promise.all([
+      token.symbol(), token.balanceOf(wallet.address),
+      provider.call({ to: info.splitter, data: SPLITTER_CLAIMABLE + coder.encode(["address"], [wallet.address]).slice(2) }),
+    ]), { label: "status" });
+    const claimable = BigInt(claimRaw === "0x" ? 0 : claimRaw);
+    const isCreator = info.creator.toLowerCase() === wallet.address.toLowerCase();
+    return {
+      symbol, info, quote: q, balance: ethers.formatEther(bal), balanceRaw: bal, claimable: ethers.formatUnits(claimable, q.decimals), claimableRaw: claimable,
+      text:
+        `Token: ${symbol}\nSaldo kamu: ${fmtNum(ethers.formatEther(bal), 2)} ${symbol}\n` +
+        `Pool: Uniswap v4 (quote ${q.symbol}), buy tax ${info.buyTax} bps / sell tax ${info.sellTax} bps\n` +
+        (isCreator ? `Fee creator siap klaim: ${fmtNum(ethers.formatUnits(claimable, q.decimals), 6)} ${q.symbol} (keeper Argus juga mengklaim otomatis ke wallet creator secara berkala)` : `⚠️ Wallet ini bukan creator token (creator: ${info.creator})`),
+    };
+  },
+
+  // Bangun calldata swap router frontend. tokenIn/tokenOut: alamat token; USDC native = 0x3600….
+  _swapCalldata(info, tokenIn, tokenOut, amountIn, minOut) {
+    const step = { kind: 2n, tokenIn, tokenOut, zero: 0n, fee: POOL_FEE, tickSpacing: TICK_SPACING, hook: info.hook, hookData: "0x", poolManager: C.poolManager, zero2: 0n };
+    return SWAP_SELECTOR + coder.encode([`${STEP_T}[]`, "uint256", "uint256", "uint256", "uint256"], [[step], 0n, amountIn, minOut, 0n]).slice(2);
+  },
+
+  // Jual pct% saldo via router frontend. Quote = binary search minOut terbesar yang tidak revert (router tidak return data).
+  async sell(wallet, tokenAddr, pct, onStatus = async () => {}) {
+    const provider = wallet.provider;
+    const rpc = rawRpc(C.rpcUrls);
+    const info = await this.launchInfo(provider, tokenAddr);
+    const token = new ethers.Contract(tokenAddr, ERC20_ABI, wallet);
+    const [symbol, bal] = await withRetry(() => Promise.all([token.symbol(), token.balanceOf(wallet.address)]), { label: "token" });
+    const amount = (bal * BigInt(pct)) / 100n;
+    if (amount <= 0n) throw new Error(`Saldo ${symbol} 0.`);
+    const usdcQuote = info.quote.toLowerCase() === C.usdc;
+    const outAddr = info.quote; // tokenOut = quote asset (0x3600… untuk USDC; diverifikasi via eth_call, 0x0 revert untuk pool Portal #7)
+    // minOut/amountOut router dalam skala 18 desimal untuk USDC native (diverifikasi: minOut 1e18 = 1 USDC lolos, 10e18 revert saat spot 8.85 USDC)
+    const outSym = usdcQuote ? "USDC" : "ARGUS", outDec = 18;
+    const allowance = await token.allowance(wallet.address, C.swapRouter);
+    if (allowance < amount) {
+      await onStatus(`🔏 Approve ${symbol} ke router...`);
+      await waitTx(await token.approve(C.swapRouter, amount), { timeoutMs: 120_000, label: "Approve" });
+    }
+    await onStatus("🔎 Quote jual (simulasi)...");
+    const ok = async (minOut) => rpc("eth_call", [{ from: wallet.address, to: C.swapRouter, data: this._swapCalldata(info, tokenAddr, outAddr, amount, minOut) }, "latest"]).then(() => true).catch(() => false);
+    if (!(await ok(0n))) throw new Error("Simulasi jual gagal (router revert). Pool/hook mungkin berbeda dari yang dikenal bot.");
+    // batas atas: nilai yang pasti gagal; naikkan 4× sampai revert
+    let lo = 0n, hi = 10n ** 15n;
+    while (await ok(hi)) { lo = hi; hi *= 4n; if (hi > 10n ** 40n) break; }
+    for (let i = 0; i < 24 && hi - lo > hi / 2000n; i++) { const mid = (lo + hi) / 2n; if (await ok(mid)) lo = mid; else hi = mid; }
+    const quote = lo;
+    if (quote <= 0n) throw new Error("Quote jual 0 — likuiditas/pool tidak ditemukan.");
+    const minOut = (quote * (10_000n - CFG.slippageBps)) / 10_000n;
+    const data = this._swapCalldata(info, tokenAddr, outAddr, amount, minOut);
+    const gas = BigInt(await rpc("eth_estimateGas", [{ from: wallet.address, to: C.swapRouter, data }]));
+    await onStatus(`📤 Jual ${fmtNum(ethers.formatEther(amount), 2)} ${symbol} → ≈ ${fmtNum(ethers.formatUnits(quote, outDec), 6)} ${outSym} (min ${fmtNum(ethers.formatUnits(minOut, outDec), 6)})...`);
+    const tx = await wallet.sendTransaction({ to: C.swapRouter, data, gasLimit: (gas * 120n) / 100n });
+    await onStatus(`⏳ Tx terkirim: ${tx.hash}\nMenunggu konfirmasi...`);
+    const receipt = await waitTx(tx, { label: "Jual" });
+    return {
+      txHash: receipt.hash, amountIn: ethers.formatEther(amount), symbol, out: ethers.formatUnits(quote, outDec), outSymbol: outSym, gas: receipt.gasUsed.toString(),
+      links: { tx: `${C.explorer}/tx/${receipt.hash}` },
+      text: `✅ Terjual ${fmtNum(ethers.formatEther(amount), 2)} ${symbol} → ≈ ${fmtNum(ethers.formatUnits(quote, outDec), 6)} ${outSym}`,
+    };
+  },
+
+  // Klaim fee creator dari splitter (splitter.claim(creator); dana ke wallet creator).
+  async claim(wallet, tokenAddr, onStatus = async () => {}) {
+    const st = await this.status(wallet, tokenAddr);
+    if (st.info.creator.toLowerCase() !== wallet.address.toLowerCase()) throw new Error("Wallet ini bukan creator token.");
+    if (st.claimableRaw <= 0n) throw new Error("Belum ada fee creator yang bisa diklaim (0). Fee diakumulasi & didistribusi keeper Argus secara berkala.");
+    await onStatus(`📤 Klaim ${fmtNum(st.claimable, 6)} ${st.quote.symbol}...`);
+    const tx = await wallet.sendTransaction({ to: st.info.splitter, data: SPLITTER_CLAIM + coder.encode(["address"], [wallet.address]).slice(2) });
+    await onStatus(`⏳ Tx terkirim: ${tx.hash}\nMenunggu konfirmasi...`);
+    const receipt = await waitTx(tx, { label: "Klaim" });
+    return { txHash: receipt.hash, amount: st.claimable, symbol: st.quote.symbol, links: { tx: `${C.explorer}/tx/${receipt.hash}` }, text: `✅ Fee creator diklaim: ${fmtNum(st.claimable, 6)} ${st.quote.symbol}` };
   },
 };

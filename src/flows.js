@@ -3,6 +3,7 @@
 // Tiap step: { label, ask, handle(text, data) -> error string | undefined, options?: [[label, value], ...] }
 // options → ditampilkan sebagai tombol inline; value-nya di-handle lewat jalur yang sama dengan teks ketikan.
 import { ethers } from "ethers";
+import { CFG } from "./config.js";
 
 const skip = (t) => (t === "-" ? "" : t);
 const isUrl = (t) => /^(https?:\/\/|ipfs:\/\/)\S+$/i.test(t);
@@ -57,10 +58,22 @@ export const FLOWS = {
         d.exemptions = list.map((a) => ethers.getAddress(a));
       },
     }],
+    ["pair", {
+      label: "Pair token",
+      ask: "🔗 Pair token curve: ETH (default) atau ERC-20 yang disetujui factory (USDG, cbBTC, saham tokenized…). Pilih preset atau ketik alamat 0x… (dicek on-chain).",
+      options: [["ETH", "eth"], ...CFG.pons.pairPresets],
+      // Alamat non-preset divalidasi on-chain di bot (checkPair) sebelum lanjut; di sini hanya format.
+      handle: (t, d) => {
+        if (/^eth$/i.test(t) || t === "-") { d.pairToken = ""; d.pairSymbol = "ETH"; d.pairNeedsCheck = false; return; }
+        if (!ethers.isAddress(t)) return "Ketik 'eth' atau alamat 0x… yang valid.";
+        const preset = CFG.pons.pairPresets.find(([, a]) => a.toLowerCase() === t.toLowerCase());
+        d.pairToken = ethers.getAddress(t); d.pairSymbol = preset ? preset[0] : "?"; d.pairNeedsCheck = !preset;
+      },
+    }],
     ["devbuy", {
-      label: "Dev buy", ask: "🛒 Dev buy awal (ETH). 0 = tanpa beli. Fee launch 0.0005 ETH ditambahkan otomatis.",
+      label: "Dev buy", ask: "🛒 Dev buy awal (dalam pair token: ETH/USDG/…). 0 = tanpa beli. Fee launch 0.0005 ETH ditambahkan otomatis.",
       options: [["0", "0"], ["0.01", "0.01"], ["0.05", "0.05"], ["0.1", "0.1"]],
-      handle: (t, d) => { const n = parseAmount(t); if (isNaN(n)) return "Masukkan angka ETH valid."; d.devBuy = n; },
+      handle: (t, d) => { const n = parseAmount(t); if (isNaN(n)) return "Masukkan angka valid."; d.devBuy = n; },
     }],
   ],
   argus: [
@@ -87,10 +100,16 @@ export const FLOWS = {
         d.alloc = { creatorFunds: p[0], buybackBurn: p[1], dividends: p[2], liquidity: p[3] };
       },
     }],
+    ["quote", {
+      label: "Quote",
+      ask: "💱 Quote asset pool: USDC (default) atau ARGUS. Dengan ARGUS, startMcap/bondMcap dihitung dari harga ARGUS saat launch (≈ 2.500 / 45.000 USDC).",
+      options: [["USDC", "USDC"], ["ARGUS", "ARGUS"]],
+      handle: (t, d) => { const q = t.toUpperCase(); if (!["USDC", "ARGUS"].includes(q)) return "Pilih USDC atau ARGUS."; d.quote = q; },
+    }],
     ["devbuy", {
-      label: "Dev buy", ask: "🛒 Dev buy awal (USDC). 0 = tanpa beli. Tidak ada fee launch, hanya gas (~0.06 USDC).",
+      label: "Dev buy", ask: "🛒 Dev buy awal (dalam quote asset: USDC/ARGUS). 0 = tanpa beli. Tidak ada fee launch, hanya gas (~0.06 USDC).",
       options: [["0", "0"], ["10", "10"], ["50", "50"], ["100", "100"]],
-      handle: (t, d) => { const n = parseAmount(t); if (isNaN(n)) return "Masukkan angka USDC valid."; d.devBuy = n; },
+      handle: (t, d) => { const n = parseAmount(t); if (isNaN(n)) return "Masukkan angka valid."; d.devBuy = n; },
     }],
   ],
 };
@@ -107,9 +126,9 @@ export function summary(platform, label, d) {
     return base + `Discord: ${s.discord || "-"} | Farcaster: ${s.farcaster || "-"}\n` +
       `Creator tax: ${d.creatorTaxBps} bps (${d.creatorTaxBps / 100}%) | Buyback: ${d.buybackEnabled ? "on" : "off"}\n` +
       `Bebas snipe tax: ${d.exemptions?.length ? d.exemptions.join(", ") : "hanya launcher"}\n` +
-      `Dev buy: ${d.devBuy} ETH (+ fee 0.0005 ETH)`;
+      `Pair: ${d.pairSymbol || "ETH"}${d.pairToken ? ` (${d.pairToken})` : ""}\nDev buy: ${d.devBuy} ${d.pairSymbol || "ETH"} (+ fee 0.0005 ETH)`;
   }
   const a = d.alloc;
   return base + `Buy tax: ${d.buyTaxBps} bps (${d.buyTaxBps / 100}%) | Sell tax: ${d.sellTaxBps} bps (${d.sellTaxBps / 100}%)\n` +
-    `Alokasi: creator ${a.creatorFunds} / buyback ${a.buybackBurn} / dividends ${a.dividends} / liquidity ${a.liquidity}\nDev buy: ${d.devBuy} USDC`;
+    `Alokasi: creator ${a.creatorFunds} / buyback ${a.buybackBurn} / dividends ${a.dividends} / liquidity ${a.liquidity}\nQuote: ${d.quote || "USDC"} | Dev buy: ${d.devBuy} ${d.quote || "USDC"}`;
 }

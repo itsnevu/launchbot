@@ -80,6 +80,8 @@ async function toConfirm(api) {
   assert.match(api.last().text, /buyback/i);
   await api.cb("opt:y");
   await api.text("-"); // exemptions
+  assert.match(api.last().text, /Pair token/);
+  await api.cb("opt:eth");
   await api.text("0.01"); // dev buy
   assert.match(api.last().text, /Konfirmasi launch/);
   assert.match(api.last().text, /Creator tax: 300 bps \(3%\)/);
@@ -184,4 +186,35 @@ test("validasi input salah → pesan ❌ dan step tidak maju; /cancel hapus key"
   await api.text("/cancel");
   assert.equal(api.session().pk, null);
   assert.match(api.last().text, /Key dihapus/);
+});
+
+test("flow /manage: platform → key → token → status → jual → klaim → selesai (key dihapus)", async () => {
+  const p = fakePlatform("pons");
+  p.status = async (w, token) => ({ text: `Token: FAKE ${token.slice(0, 6)}\nSaldo kamu: 100 FAKE` });
+  p.sell = async (w, token, pct, onStatus) => { await onStatus("🔎 Quote jual..."); return { txHash: TX, amountIn: String(pct), text: `✅ Terjual ${pct}%`, links: { tx: `https://explorer.test/tx/${TX}` } }; };
+  p.claim = async () => { throw new Error("Belum ada fee creator yang bisa diklaim."); };
+  const api = harness({ pons: p });
+  await api.text("/manage");
+  assert.match(api.last().text, /Kelola token/);
+  await api.cb("mpf:pons");
+  assert.match(api.last().text, /PRIVATE KEY/);
+  await api.text(PK);
+  assert.match(api.last().text, /alamat token/i);
+  assert.equal(api.session().mode, "manage");
+  await api.text("bukan-alamat");
+  assert.match(api.last().text, /tidak valid/);
+  await api.text(TOKEN_ADDR);
+  assert.match(api.last().text, /Saldo kamu: 100 FAKE/);
+  assert.equal(api.session().step, "mmenu");
+  await api.cb("m:sell:50");
+  await api.untilSent((m) => /Terjual 50%/.test(m.text));
+  await api.untilSent((m) => m.text.includes("Saldo kamu") && api.sent().indexOf(m) > api.sent().findIndex((x) => /Terjual/.test(x.text)));
+  assert.equal(api.session().pk, PK, "key tetap di sesi selama menu kelola");
+  await api.cb("m:claim");
+  await api.untilSent((m) => /Belum ada fee/.test(m.text));
+  await api.cb("m:done");
+  assert.match(api.last().text, /Key dihapus/);
+  assert.equal(api.session().pk, null);
+  const rows = (await import("../src/history.js")).readHistory ? await (await import("../src/history.js")).readHistory(7, 50) : [];
+  assert.ok(rows.some((r) => r.status === "sell" && r.tx === TX), "jual tercatat di riwayat");
 });
