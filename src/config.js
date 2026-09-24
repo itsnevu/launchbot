@@ -19,8 +19,12 @@ export const CFG = {
     router: process.env.PONS_ROUTER || "0xe33E9E479dF8802cb0866d5d05258bEc4cF62948",
     launchConfigId: 0n,
     pairToken: "0x0000000000000000000000000000000000000000", // native ETH (default)
-    // Pair ERC-20 yang disetujui factory (approvedPairTokens) — preset tombol; alamat lain bisa diketik & dicek on-chain.
-    pairPresets: [["USDG", "0x5fc5360d0400a0fd4f2af552add042d716f1d168"], ["cbBTC", "0xcec185eb182c47d1ba1efc84e6959e18cd620be4"], ["NVDA", "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec"]],
+    pairPresets: [
+      ["USDG", "0x5fc5360d0400a0fd4f2af552add042d716f1d168"],
+      ["cbBTC", "0xcec185eb182c47d1ba1efc84e6959e18cd620be4"],
+      ["GLD", "0xC9a981FEE1F9DEc688bb123ccDeCc63D0deBFC4e"],
+      ["NVDA", "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec"],
+    ],
     explorer: "https://robinhoodchain.blockscout.com",
     maxCreatorTaxBps: 1000,
     // Escrow fee creator (curve.feeEscrow()): curve.sweepFees() → escrow.credit(creator) → escrow.claim() oleh creator.
