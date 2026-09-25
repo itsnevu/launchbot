@@ -77,6 +77,8 @@ async function toConfirm(api) {
   for (const t of ["Meme Coin", "meme", "-", "-", "-", "-", "-", "-", "-"]) await api.text(t); // nama..farcaster
   assert.match(api.last().text, /Creator tax/);
   await api.cb("opt:300");
+  assert.match(api.last().text, /penerima fee/i);
+  await api.text("-"); // pakai launcher
   assert.match(api.last().text, /buyback/i);
   await api.cb("opt:y");
   await api.text("-"); // exemptions

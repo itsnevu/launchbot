@@ -50,6 +50,13 @@ test("dev buy: desimal koma diterima, teks ditolak", () => {
   assert.ok(run("pons", "devbuy", "-1").err);
 });
 
+test("feeRecipient pons: alamat valid, checksum, atau skip/kosong", () => {
+  const a = "0x000000000000000000000000000000000000dead";
+  assert.equal(run("pons", "feeRecipient", "-").d.creatorFeeRecipient, "");
+  assert.equal(run("pons", "feeRecipient", a).d.creatorFeeRecipient, "0x000000000000000000000000000000000000dEaD");
+  assert.ok(run("pons", "feeRecipient", "0x123").err);
+});
+
 test("exemptions pons: alamat valid, checksum, maks 10", () => {
   const a = "0x000000000000000000000000000000000000dead";
   assert.deepEqual(run("pons", "exemptions", "-").d.exemptions, []);

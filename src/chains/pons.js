@@ -155,7 +155,7 @@ export const pons = {
         twitter: data.socials?.twitter || "", telegram: data.socials?.telegram || "",
         discord: data.socials?.discord || "", website: data.socials?.website || "", farcaster: data.socials?.farcaster || "",
       },
-      creatorFeeRecipient: wallet.address, // wajib untuk launchAndBuy
+      creatorFeeRecipient: data.creatorFeeRecipient ? ethers.getAddress(data.creatorFeeRecipient) : wallet.address,
       creatorTaxBps: Number(data.creatorTaxBps || 0),
       buybackEnabled: !!data.buybackEnabled,
       expectedEconomics,

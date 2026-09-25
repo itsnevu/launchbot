@@ -45,6 +45,16 @@ export const FLOWS = {
       options: [["0%", "0"], ["1%", "100"], ["3%", "300"], ["5%", "500"], ["10%", "1000"]],
       handle: (t, d) => { const n = bpsInRange(t, 0, 1000); if (isNaN(n)) return "Masukkan angka 0–1000 (bps)."; d.creatorTaxBps = n; },
     }],
+    ["feeRecipient", {
+      label: "Penerima fee",
+      ask: "👛 Wallet penerima fee creator trading? Kirim alamat 0x… atau klik '-' untuk pakai wallet launcher saat ini.",
+      options: [["⏭️ Pakai launcher", "-"]],
+      handle: (t, d) => {
+        if (t === "-" || !t) { d.creatorFeeRecipient = ""; return; }
+        if (!ethers.isAddress(t)) return "Alamat wallet penerima tidak valid (harus 0x…).";
+        d.creatorFeeRecipient = ethers.getAddress(t);
+      },
+    }],
     ["buyback", { label: "Buyback", ask: "🔁 Aktifkan buyback?", options: YN, handle: (t, d) => { if (!/^[yn]/i.test(t)) return "Jawab y atau n."; d.buybackEnabled = /^y/i.test(t); } }],
     ["exemptions", {
       label: "Bebas snipe tax",
@@ -124,8 +134,8 @@ export function summary(platform, label, d) {
     `Website: ${s.website || "-"} | X: ${s.twitter || "-"} | TG: ${s.telegram || "-"}\n`;
   if (platform === "pons") {
     return base + `Discord: ${s.discord || "-"} | Farcaster: ${s.farcaster || "-"}\n` +
-      `Creator tax: ${d.creatorTaxBps} bps (${d.creatorTaxBps / 100}%) | Buyback: ${d.buybackEnabled ? "on" : "off"}\n` +
-      `Bebas snipe tax: ${d.exemptions?.length ? d.exemptions.join(", ") : "hanya launcher"}\n` +
+      `Creator tax: ${d.creatorTaxBps} bps (${d.creatorTaxBps / 100}%) | Penerima fee: ${d.creatorFeeRecipient || "wallet launcher"}\n` +
+      `Buyback: ${d.buybackEnabled ? "on" : "off"} | Bebas snipe tax: ${d.exemptions?.length ? d.exemptions.join(", ") : "hanya launcher"}\n` +
       `Pair: ${d.pairSymbol || "ETH"}${d.pairToken ? ` (${d.pairToken})` : ""}\nDev buy: ${d.devBuy} ${d.pairSymbol || "ETH"} (+ fee 0.0005 ETH)`;
   }
   const a = d.alloc;
