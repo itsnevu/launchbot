@@ -1,4 +1,4 @@
-import config from './src/config.js';
+import { config } from './src/config.js';
 import { fundAccount, launchAccount, getBalance } from './src/wallets.js';
 import { bot } from './src/bot.js';
 
