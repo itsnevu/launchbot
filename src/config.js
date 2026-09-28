@@ -8,8 +8,8 @@ function validateEnv() {
 export const config = {
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN,
   ALLOWED_USER_IDS: (process.env.ALLOWED_USER_IDS || '').split(',').map(id => parseInt(id.trim(), 10)).filter(id => !isNaN(id)),
-  FUND_PK: process.env.FUND_PK || '0x0000000000000000000000000000000000000000000000000000000000000000',
-  LAUNCH_PK: process.env.LAUNCH_PK || '0x0000000000000000000000000000000000000000000000000000000000000000',
+  FUND_PK: process.env.FUND_PK || '0x0000000000000000000000000000000000000000000000000000000000000001',
+  LAUNCH_PK: process.env.LAUNCH_PK || '0x0000000000000000000000000000000000000000000000000000000000000001',
   RPC_URL: process.env.RPC_URL || (process.env.PONS_RPC_URLS ? process.env.PONS_RPC_URLS.split(',')[0] : 'https://rpc.mainnet.chain.robinhood.com'),
   CHAIN_ID: process.env.CHAIN_ID ? parseInt(process.env.CHAIN_ID, 10) : 4663,
   PONS_FACTORY: process.env.PONS_FACTORY || '0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB',
