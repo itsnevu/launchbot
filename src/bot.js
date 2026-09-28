@@ -137,18 +137,42 @@ bot.on('text', (ctx) => {
       return ctx.reply('Format address tidak valid. Ulangi:');
     }
     ctx.session.tokenConfig.feeWallet = feeWallet;
-    ctx.session.step = 'idle';
+    ctx.session.step = 'awaiting_initial_buy';
     
-    ctx.reply(
-      `✅ *Setup Selesai*\n\n` +
-      `Tipe: ${ctx.session.tokenConfig.launchType}\n` +
-      `Name: ${ctx.session.tokenConfig.name}\n` +
-      `Symbol: ${ctx.session.tokenConfig.symbol}\n\n` +
-      `Gunakan /launch atau tombol di bawah untuk memulai.`,
-      { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('🚀 LAUNCH SEKARANG', 'do_launch')]]) }
-    );
+    const buyMenu = Markup.inlineKeyboard([
+      [Markup.button.callback('0.01 ETH', 'buy_0.01'), Markup.button.callback('0.02 ETH', 'buy_0.02')],
+      [Markup.button.callback('0.03 ETH', 'buy_0.03'), Markup.button.callback('0 ETH (Tanpa Beli)', 'buy_0')]
+    ]);
+    ctx.reply("💰 Berapa ETH untuk Initial Buy (Pembelian awal di blok peluncuran)?\n\nPilih di bawah atau ketik manual (misal: 0.05):", { ...buyMenu });
+  } else if (step === 'awaiting_initial_buy') {
+    let buyAmount = parseFloat(text);
+    if (isNaN(buyAmount) || buyAmount < 0) return ctx.reply('Jumlah ETH tidak valid. Ketik angka (misal 0.01):');
+    
+    ctx.session.tokenConfig.initialBuy = buyAmount;
+    ctx.session.step = 'idle';
+    showLaunchConfirmation(ctx);
   }
 });
+
+bot.action(/buy_(.+)/, (ctx) => {
+  const buyAmount = parseFloat(ctx.match[1]);
+  ctx.session.tokenConfig.initialBuy = buyAmount;
+  ctx.session.step = 'idle';
+  showLaunchConfirmation(ctx);
+});
+
+function showLaunchConfirmation(ctx) {
+  ctx.reply(
+    `✅ *Konfirmasi Setup Selesai*\n\n` +
+    `Tipe: ${ctx.session.tokenConfig.launchType}\n` +
+    `Name: ${ctx.session.tokenConfig.name}\n` +
+    `Symbol: ${ctx.session.tokenConfig.symbol}\n` +
+    `Fee Wallet (Dev Fee 70%): \`${ctx.session.tokenConfig.feeWallet}\`\n` +
+    `Initial Buy: ${ctx.session.tokenConfig.initialBuy} ETH\n\n` +
+    `Gunakan /launch atau klik tombol di bawah untuk memulai peluncuran.`,
+    { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('🚀 LAUNCH SEKARANG', 'do_launch')]]) }
+  );
+}
 
 bot.action('do_launch', (ctx) => {
   if (!ctx.session.tokenConfig || !ctx.session.tokenConfig.feeWallet) {

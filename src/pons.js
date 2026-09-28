@@ -47,7 +47,7 @@ export function getFactoryData(launchType) {
   return { address: config.PONS_FACTORY, abi: PONS_FACTORY_ABI, fee: config.PONS_LAUNCH_FEE };
 }
 
-export function buildLaunchTx(launchType, name, symbol, imageUrl, description, feeWallet) {
+export function buildLaunchTx(launchType, name, symbol, imageUrl, description, feeWallet, initialBuyEth = 0) {
   const factory = getFactoryData(launchType);
   
   const data = encodeFunctionData({
@@ -56,10 +56,11 @@ export function buildLaunchTx(launchType, name, symbol, imageUrl, description, f
     args: [name, symbol, imageUrl, description, feeWallet]
   });
 
+  const totalValue = parseEther(factory.fee.toString()) + parseEther(initialBuyEth.toString());
   return {
     to: factory.address,
     data,
-    value: parseEther(factory.fee.toString())
+    value: totalValue
   };
 }
 

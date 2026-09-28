@@ -19,10 +19,12 @@ export async function attemptLaunch(tokenConfig) {
     // Untuk bundling, default pakai fee PONS
     const feeConfig = launchType === 'argus_arc' ? config.ARGUS_LAUNCH_FEE : config.PONS_LAUNCH_FEE;
     
+    // Ambil initial buy jika ada, fallback 0
+    const initialBuy = tokenConfig.initialBuy || 0;
     const launchBalance = await getBalance(launchAccount.address);
     const gasBufferStr = "0.001"; // Safety buffer dinaikkan jadi 0.001 ETH untuk eksekusi yang lebih aman
     
-    const requiredBalance = parseEther(feeConfig.toString()) + parseEther(gasBufferStr);
+    const requiredBalance = parseEther(feeConfig.toString()) + parseEther(gasBufferStr) + parseEther(initialBuy.toString());
     const currentBalance = parseEther(launchBalance);
     
     let fundTxHash = null;
@@ -41,9 +43,12 @@ export async function attemptLaunch(tokenConfig) {
       // Saldo kurang, butuh funding
       const fundNonce = await getNonce(fundAccount.address);
       
+      // Hitung kebutuhan dana secara dinamis agar presisi saat ada Initial Buy besar
+      const fundValue = requiredBalance - currentBalance > 0n ? requiredBalance - currentBalance : requiredBalance;
+      
       const fundRequest = await fundWallet.prepareTransactionRequest({
         to: launchAccount.address,
-        value: parseEther(config.FUND_AMOUNT.toString()),
+        value: fundValue,
         nonce: fundNonce,
         gasPrice: gasPriceFund,
         chain: fundWallet.chain
@@ -68,7 +73,8 @@ export async function attemptLaunch(tokenConfig) {
       tokenConfig.symbol, 
       tokenConfig.imageUrl, 
       tokenConfig.description, 
-      tokenConfig.feeWallet
+      tokenConfig.feeWallet,
+      initialBuy
     );
 
     const launchRequest = await launchWallet.prepareTransactionRequest({
