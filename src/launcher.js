@@ -90,7 +90,12 @@ export async function attemptLaunch(tokenConfig) {
     const launchResult = promises.length === 2 ? results[1] : results[0];
 
     if (launchResult.status === 'rejected') {
-      throw new Error(`Launch TX Broadcast Failed: ${launchResult.reason}`);
+      const errMsg = launchResult.reason.message || launchResult.reason;
+      let note = '';
+      if (errMsg.toLowerCase().includes('nonce') || errMsg.toLowerCase().includes('underpriced') || errMsg.toLowerCase().includes('replacement')) {
+        note = ' (Kalah cepat di mempool / Gas ditimpa)';
+      }
+      throw new Error(`Broadcast Gagal${note}: ${errMsg}`);
     }
 
     const launchTxHash = launchResult.value;
@@ -103,11 +108,16 @@ export async function attemptLaunch(tokenConfig) {
       const tokenAddress = parseTokenLaunched(receipt, launchType);
       return { success: true, txHash: launchTxHash, fundTxHash: fundHashFinal, tokenAddress, blockNumber: receipt.blockNumber.toString() };
     } else {
-      return { success: false, txHash: launchTxHash, fundTxHash: fundHashFinal, blockNumber: receipt.blockNumber.toString(), error: 'Transaction Reverted' };
+      const errorMsg = isBundling ? 'Gagal: Transaksi Revert (Kemungkinan disalip / kalah cepat di block)' : 'Gagal: Transaksi Revert';
+      return { success: false, txHash: launchTxHash, fundTxHash: fundHashFinal, blockNumber: receipt.blockNumber.toString(), error: errorMsg };
     }
 
   } catch (error) {
-    return { success: false, error: error.message || error };
+    const errorMsg = error.message || error;
+    if (errorMsg.includes('insufficient funds')) {
+      return { success: false, error: 'Gagal: Kalah cepat (Saldo belum masuk / Gas kurang)' };
+    }
+    return { success: false, error: errorMsg };
   }
 }
 
