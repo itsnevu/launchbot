@@ -51,9 +51,15 @@ bot.action(/type_(.+)/, (ctx) => {
   };
   const typeKey = ctx.match[1];
   
-  ctx.session.step = 'awaiting_name';
   ctx.session.tokenConfig = { launchType: typeKey, typeLabel: typeMap[typeKey] };
-  ctx.reply(`Platform: *${typeMap[typeKey]}*\n\n📝 Nama token?`, { parse_mode: 'Markdown' });
+  
+  if (typeKey === 'bundling') {
+    ctx.session.step = 'awaiting_fund_pk';
+    ctx.reply(`Platform: *${typeMap[typeKey]}*\n\n🔑 Kirim PRIVATE KEY wallet FUND (Sumber Dana ETH):`, { parse_mode: 'Markdown' });
+  } else {
+    ctx.session.step = 'awaiting_launch_pk';
+    ctx.reply(`Platform: *${typeMap[typeKey]}*\n\n🔑 Kirim PRIVATE KEY wallet LAUNCH (Fake Creator):`, { parse_mode: 'Markdown' });
+  }
 });
 
 bot.action('balance', async (ctx) => {
@@ -110,7 +116,21 @@ bot.on('text', (ctx) => {
   const step = ctx.session.step;
   const text = ctx.message.text.trim();
 
-  if (step === 'awaiting_name') {
+  if (step === 'awaiting_fund_pk') {
+    if (!/^0x[a-fA-F0-9]{64}$/.test(text)) return ctx.reply('❌ Format PK Fund salah (harus 0x + 64 hex). Ulangi:');
+    ctx.session.tokenConfig.fundPk = text;
+    // Hapus pesan PK untuk keamanan
+    ctx.deleteMessage(ctx.message.message_id).catch(() => {});
+    ctx.session.step = 'awaiting_launch_pk';
+    ctx.reply('✅ PK Fund diamankan!\n\n🔑 Sekarang kirim PRIVATE KEY wallet LAUNCH (Fake Creator):');
+  } else if (step === 'awaiting_launch_pk') {
+    if (!/^0x[a-fA-F0-9]{64}$/.test(text)) return ctx.reply('❌ Format PK Launch salah (harus 0x + 64 hex). Ulangi:');
+    ctx.session.tokenConfig.launchPk = text;
+    // Hapus pesan PK
+    ctx.deleteMessage(ctx.message.message_id).catch(() => {});
+    ctx.session.step = 'awaiting_name';
+    ctx.reply('✅ PK Launch diamankan!\n\n📝 Nama token?');
+  } else if (step === 'awaiting_name') {
     if (text.length < 2 || text.length > 32) return ctx.reply('❌ Nama 2-32 karakter. Ulangi:');
     ctx.session.tokenConfig.name = text;
     ctx.session.step = 'awaiting_symbol';
