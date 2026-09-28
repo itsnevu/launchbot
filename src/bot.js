@@ -52,8 +52,8 @@ bot.action(/type_(.+)/, (ctx) => {
   const typeKey = ctx.match[1];
   
   ctx.session.step = 'awaiting_name';
-  ctx.session.tokenConfig = { launchType: typeKey };
-  ctx.reply(`✅ Tipe dipilih: *${typeMap[typeKey]}*\n\n📝 Kirim nama token:`, { parse_mode: 'Markdown' });
+  ctx.session.tokenConfig = { launchType: typeKey, typeLabel: typeMap[typeKey] };
+  ctx.reply(`Platform: *${typeMap[typeKey]}*\n\n📝 Nama token?`, { parse_mode: 'Markdown' });
 });
 
 bot.action('balance', async (ctx) => {
@@ -111,42 +111,42 @@ bot.on('text', (ctx) => {
   const text = ctx.message.text.trim();
 
   if (step === 'awaiting_name') {
-    if (text.length > 32) return ctx.reply('Nama max 32 char. Ulangi:');
+    if (text.length < 2 || text.length > 32) return ctx.reply('❌ Nama 2-32 karakter. Ulangi:');
     ctx.session.tokenConfig.name = text;
     ctx.session.step = 'awaiting_symbol';
-    ctx.reply('📝 Kirim ticker token:');
+    ctx.reply('🔤 Symbol/ticker? (mis. MEME)');
   } else if (step === 'awaiting_symbol') {
-    if (text.length > 8) return ctx.reply('Symbol max 8 char. Ulangi:');
-    ctx.session.tokenConfig.symbol = text;
+    if (text.length < 1 || text.length > 8) return ctx.reply('❌ Symbol 1-8 karakter. Ulangi:');
+    ctx.session.tokenConfig.symbol = text.toUpperCase();
     ctx.session.step = 'awaiting_image';
-    ctx.reply("📝 Kirim URL gambar (atau ketik 'skip'):");
+    ctx.reply("🖼️ URL Logo? Kirim link atau ketik '-' untuk kosong:");
   } else if (step === 'awaiting_image') {
-    ctx.session.tokenConfig.imageUrl = text.toLowerCase() === 'skip' ? '' : text;
+    ctx.session.tokenConfig.imageUrl = text === '-' ? '' : text;
     ctx.session.step = 'awaiting_desc';
-    ctx.reply("📝 Kirim deskripsi (atau ketik 'skip'):");
+    ctx.reply("📝 Deskripsi? Kirim teks atau ketik '-' untuk kosong:");
   } else if (step === 'awaiting_desc') {
-    ctx.session.tokenConfig.description = text.toLowerCase() === 'skip' ? '' : text;
+    ctx.session.tokenConfig.description = text === '-' ? '' : text;
     ctx.session.step = 'awaiting_feewallet';
-    ctx.reply("📝 Kirim fee wallet address (atau ketik 'default'):");
+    ctx.reply("👛 Wallet Recipient (Penerima Dev Fee)? Kirim alamat 0x... atau ketik '-' untuk pakai wallet launcher.");
   } else if (step === 'awaiting_feewallet') {
     let feeWallet = text;
-    if (text.toLowerCase() === 'default') {
+    if (text === '-') {
       feeWallet = launchAccount.address; 
     }
     if (!/^0x[a-fA-F0-9]{40}$/.test(feeWallet)) {
-      return ctx.reply('Format address tidak valid. Ulangi:');
+      return ctx.reply('❌ Format address tidak valid. Ulangi:');
     }
     ctx.session.tokenConfig.feeWallet = feeWallet;
     ctx.session.step = 'awaiting_initial_buy';
     
     const buyMenu = Markup.inlineKeyboard([
       [Markup.button.callback('0.01 ETH', 'buy_0.01'), Markup.button.callback('0.02 ETH', 'buy_0.02')],
-      [Markup.button.callback('0.03 ETH', 'buy_0.03'), Markup.button.callback('0 ETH (Tanpa Beli)', 'buy_0')]
+      [Markup.button.callback('0.03 ETH', 'buy_0.03'), Markup.button.callback('0 ETH', 'buy_0')]
     ]);
-    ctx.reply("💰 Berapa ETH untuk Initial Buy (Pembelian awal di blok peluncuran)?\n\nPilih di bawah atau ketik manual (misal: 0.05):", { ...buyMenu });
+    ctx.reply("💰 Berapa ETH untuk Initial Buy?\nPilih atau ketik manual (misal: 0.05):", { ...buyMenu });
   } else if (step === 'awaiting_initial_buy') {
     let buyAmount = parseFloat(text);
-    if (isNaN(buyAmount) || buyAmount < 0) return ctx.reply('Jumlah ETH tidak valid. Ketik angka (misal 0.01):');
+    if (isNaN(buyAmount) || buyAmount < 0) return ctx.reply('❌ Jumlah ETH tidak valid. Ketik angka:');
     
     ctx.session.tokenConfig.initialBuy = buyAmount;
     ctx.session.step = 'idle';
@@ -162,17 +162,28 @@ bot.action(/buy_(.+)/, (ctx) => {
 });
 
 function showLaunchConfirmation(ctx) {
+  const cfg = ctx.session.tokenConfig;
   ctx.reply(
-    `✅ *Konfirmasi Setup Selesai*\n\n` +
-    `Tipe: ${ctx.session.tokenConfig.launchType}\n` +
-    `Name: ${ctx.session.tokenConfig.name}\n` +
-    `Symbol: ${ctx.session.tokenConfig.symbol}\n` +
-    `Fee Wallet (Dev Fee 70%): \`${ctx.session.tokenConfig.feeWallet}\`\n` +
-    `Initial Buy: ${ctx.session.tokenConfig.initialBuy} ETH\n\n` +
-    `Gunakan /launch atau klik tombol di bawah untuk memulai peluncuran.`,
-    { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('🚀 LAUNCH SEKARANG', 'do_launch')]]) }
+    `*Konfirmasi launch:*\n\n` +
+    `Platform: ${cfg.typeLabel || cfg.launchType}\n` +
+    `Nama: ${cfg.name}\n` +
+    `Symbol: ${cfg.symbol}\n` +
+    `Deskripsi: ${cfg.description || '-'}\n` +
+    `Logo: ${cfg.imageUrl || '-'}\n` +
+    `Initial Buy: ${cfg.initialBuy} ETH\n` +
+    `Recipient (Dev Fee): \`${cfg.feeWallet}\`\n\n` +
+    `⚠️ Pastikan saldo FUND dan LAUNCH mencukupi.\n` +
+    `Tax/alokasi TIDAK bisa diubah setelah launch.\n`,
+    { parse_mode: 'Markdown', ...Markup.inlineKeyboard([
+      [Markup.button.callback('🚀 LAUNCH', 'do_launch'), Markup.button.callback('✖️ Batal', 'cancel_setup')]
+    ])}
   );
 }
+
+bot.action('cancel_setup', (ctx) => {
+  ctx.session.step = 'idle';
+  ctx.reply('❌ Setup dibatalkan.');
+});
 
 bot.action('do_launch', (ctx) => {
   if (!ctx.session.tokenConfig || !ctx.session.tokenConfig.feeWallet) {
