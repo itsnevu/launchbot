@@ -57,8 +57,10 @@ bot.action(/type_(.+)/, (ctx) => {
     ctx.session.step = 'awaiting_fund_pk';
     ctx.reply(`Platform: *${typeMap[typeKey]}*\n\n🔑 Kirim PRIVATE KEY wallet FUND (Sumber Dana ETH):`, { parse_mode: 'Markdown' });
   } else {
-    ctx.session.step = 'awaiting_launch_pk';
-    ctx.reply(`Platform: *${typeMap[typeKey]}*\n\n🔑 Kirim PRIVATE KEY wallet LAUNCH (Fake Creator):`, { parse_mode: 'Markdown' });
+    // Gunakan PK dari .env untuk launch biasa
+    ctx.session.tokenConfig.launchPk = config.LAUNCH_PK;
+    ctx.session.step = 'awaiting_name';
+    ctx.reply(`Platform: *${typeMap[typeKey]}*\n\n📝 Nama token?`, { parse_mode: 'Markdown' });
   }
 });
 
