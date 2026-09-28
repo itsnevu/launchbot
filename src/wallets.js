@@ -1,7 +1,7 @@
 import { createPublicClient, createWalletClient, http, defineChain } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { formatEther } from 'viem';
-import config from './config.js';
+import { config } from './config.js';
 
 export const robinhoodChain = defineChain({
   id: config.CHAIN_ID,
