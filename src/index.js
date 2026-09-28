@@ -1,6 +1,7 @@
 import { CFG } from "./config.js";
 import { pons } from "./chains/pons.js";
 import { argus } from "./chains/argus.js";
+import { biasa } from "./chains/biasa.js";
 import { createBot } from "./bot.js";
 import { errMsg } from "./security.js";
 
@@ -9,7 +10,7 @@ if (!/^\d{8,11}:[A-Za-z0-9_-]{35}$/.test(CFG.botToken || "")) {
   process.exit(1);
 }
 
-const PLATFORMS = { pons, argus };
+const PLATFORMS = { pons, argus, biasa };
 
 // Self-check tiap platform saat startup (RPC, chainId, kontrak/selector). Gagal → platform dinonaktifkan, bukan crash.
 for (const p of Object.values(PLATFORMS)) {

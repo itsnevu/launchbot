@@ -57,4 +57,12 @@ export const CFG = {
     // Router swap yang dipakai frontend argus.world (selector 0x4d819a2a, layout direkonstruksi dari tx nyata).
     swapRouter: "0x53dea4f7783c1de84cecc5c989bc37a557154827",
   },
+
+  biasa: {
+    chainId: parseInt(process.env.CHAIN_ID || "11155111", 10),
+    rpcUrls: list(process.env.RPC_URL || "https://rpc.ankr.com/eth_sepolia"),
+    factory: process.env.FACTORY_ADDRESS || "0x0000000000000000000000000000000000000000",
+    explorer: "https://sepolia.etherscan.io",
+    nativeSymbol: "ETH"
+  }
 };

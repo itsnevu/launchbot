@@ -168,7 +168,8 @@ bot.command("manage", async (ctx) => {
 bot.command("help", (ctx) => ctx.reply(
   "/start — mulai launch\n/manage — kelola token: status, jual, klaim fee creator\n/cancel — batalkan & hapus key dari memori\n/history — 10 launch terakhir kamu\n\n" +
   "pons v2 (Robinhood, chainId 4663): bonding curve, fee 0.0005 ETH, dev buy ETH, graduate ke Uniswap v4 di 4.2 ETH.\n" +
-  "Argus (Arc, chainId 5042): langsung pool Uniswap v4, gas & dev buy pakai USDC, tax 1–10%/sisi, liquidity locked selamanya.\n\n" +
+  "Argus (Arc, chainId 5042): langsung pool Uniswap v4, gas & dev buy pakai USDC, tax 1–10%/sisi, liquidity locked selamanya.\n" +
+  "Launch Biasa: standard token ERC20 (supply di-mint penuh) dengan Fake Creator event, tanpa tax/curve.\n\n" +
   `Sesi idle ${CFG.sessionTtlMs / 60_000} menit → key dihapus otomatis. Logo: URL atau kirim foto${ipfsEnabled() ? "" : " (upload foto belum aktif di server ini)"}.`
 ));
 bot.command("history", async (ctx) => {
@@ -183,7 +184,7 @@ bot.command("history", async (ctx) => {
 });
 
 // ---------------- callbacks ----------------
-bot.callbackQuery(/^pf:(pons|argus)$/, async (ctx) => {
+bot.callbackQuery(/^pf:(pons|argus|biasa)$/, async (ctx) => {
   const s = ctx.session;
   const platform = PLATFORMS[ctx.match[1]];
   await ctx.answerCallbackQuery();
@@ -201,7 +202,7 @@ bot.callbackQuery(/^pf:(pons|argus)$/, async (ctx) => {
   );
 });
 
-bot.callbackQuery(/^mpf:(pons|argus)$/, async (ctx) => {
+bot.callbackQuery(/^mpf:(pons|argus|biasa)$/, async (ctx) => {
   const s = ctx.session;
   const platform = PLATFORMS[ctx.match[1]];
   await ctx.answerCallbackQuery();

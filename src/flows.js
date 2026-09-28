@@ -122,6 +122,22 @@ export const FLOWS = {
       handle: (t, d) => { const n = parseAmount(t); if (isNaN(n)) return "Masukkan angka valid."; d.devBuy = n; },
     }],
   ],
+  biasa: [
+    ["name", COMMON.name], ["symbol", COMMON.symbol],
+    ["supply", {
+      label: "Supply", ask: "💰 Total Supply?", options: [["1 Juta", "1000000"], ["1 Miliar", "1000000000"]],
+      handle: (t, d) => { const n = parseInt(t, 10); if (isNaN(n) || n <= 0) return "Supply harus angka > 0."; d.supply = n; },
+    }],
+    ["recipient", {
+      label: "Recipient", ask: "👛 Wallet Recipient (Penerima token)? Kirim alamat 0x… atau klik '-' untuk pakai wallet launcher.",
+      options: [["⏭️ Pakai launcher", "-"]],
+      handle: (t, d) => {
+        if (t === "-" || !t) { d.recipient = ""; return; }
+        if (!ethers.isAddress(t)) return "Alamat wallet tidak valid.";
+        d.recipient = ethers.getAddress(t);
+      },
+    }],
+  ],
 };
 
 export const stepIndex = (platform, key) => FLOWS[platform].findIndex(([k]) => k === key);
@@ -137,6 +153,9 @@ export function summary(platform, label, d) {
       `Creator tax: ${d.creatorTaxBps} bps (${d.creatorTaxBps / 100}%) | Penerima fee: ${d.creatorFeeRecipient || "wallet launcher"}\n` +
       `Buyback: ${d.buybackEnabled ? "on" : "off"} | Bebas snipe tax: ${d.exemptions?.length ? d.exemptions.join(", ") : "hanya launcher"}\n` +
       `Pair: ${d.pairSymbol || "ETH"}${d.pairToken ? ` (${d.pairToken})` : ""}\nDev buy: ${d.devBuy} ${d.pairSymbol || "ETH"} (+ fee 0.0005 ETH)`;
+  }
+  if (platform === "biasa") {
+    return base + `Supply: ${d.supply}\nRecipient: ${d.recipient || "wallet launcher"}`;
   }
   const a = d.alloc;
   return base + `Buy tax: ${d.buyTaxBps} bps (${d.buyTaxBps / 100}%) | Sell tax: ${d.sellTaxBps} bps (${d.sellTaxBps / 100}%)\n` +
