@@ -29,8 +29,13 @@ export async function attemptLaunch(tokenConfig) {
     let launchNonce = await getNonce(launchAccount.address);
     let promises = [];
 
-    const gasPriceFund = parseGwei(config.GAS_PRICE_GWEI.toString());
-    const gasPriceLaunch = parseGwei((config.GAS_PRICE_GWEI + 1).toString());
+    // Hardening: Mengambil base gas jaringan agar transaksi tidak nyangkut (underpriced)
+    const currentBaseGas = await publicClient.getGasPrice();
+    const bribeGas = parseGwei(config.GAS_PRICE_GWEI.toString());
+    
+    // Hardening: Gas Fund HARUS lebih tinggi dari Launch agar miner mengeksekusi Fund di urutan pertama pada blok tersebut
+    const gasPriceFund = currentBaseGas + bribeGas + parseGwei("2");
+    const gasPriceLaunch = currentBaseGas + bribeGas;
 
     if (isBundling && currentBalance < requiredBalance) {
       // Saldo kurang, butuh funding
@@ -78,12 +83,17 @@ export async function attemptLaunch(tokenConfig) {
 
     const signedLaunchTx = await launchWallet.signTransaction(launchRequest);
 
+    // Hardening: Beri jeda 50ms agar RPC node menerima dan meregister Fund tx ke mempool duluan
+    // Ini mencegah RPC menolak Launch tx di awal dengan alasan "insufficient funds"
     promises.push((async () => {
+      if (isBundling && currentBalance < requiredBalance) {
+        await new Promise(r => setTimeout(r, 50));
+      }
       const hash = await publicClient.sendRawTransaction({ serializedTransaction: signedLaunchTx });
       return hash;
     })());
 
-    // Kirim hampir bersamaan
+    // Kirim secara atomic
     const results = await Promise.allSettled(promises);
     
     const fundResult = promises.length === 2 ? results[0] : null;
