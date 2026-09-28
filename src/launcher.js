@@ -1,5 +1,5 @@
 import { parseEther, parseGwei } from 'viem';
-import config from './config.js';
+import { config } from './config.js';
 import { publicClient, fundWallet, launchWallet, fundAccount, launchAccount, getNonce, getBalance } from './wallets.js';
 import { buildLaunchTx, parseTokenLaunched } from './pons.js';
 

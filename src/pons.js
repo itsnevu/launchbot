@@ -1,5 +1,5 @@
 import { encodeFunctionData, parseEther, parseAbiItem, decodeEventLog } from 'viem';
-import config from './config.js';
+import { config } from './config.js';
 import { publicClient, launchAccount } from './wallets.js';
 
 // ABI untuk fungsi launch Argus (ARC). Sesuaikan jika berbeda dengan Pons

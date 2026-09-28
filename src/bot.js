@@ -1,5 +1,5 @@
 import { Telegraf, Markup, session } from 'telegraf';
-import config from './config.js';
+import { config } from './config.js';
 import { getBalance, fundAccount, launchAccount } from './wallets.js';
 import { runWithRetry, stopRetry, lastStatus } from './launcher.js';
 
