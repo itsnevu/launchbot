@@ -126,6 +126,18 @@ bot.on('text', (ctx) => {
     ctx.reply("📝 Deskripsi? Kirim teks atau ketik '-' untuk kosong:");
   } else if (step === 'awaiting_desc') {
     ctx.session.tokenConfig.description = text === '-' ? '' : text;
+    ctx.session.step = 'awaiting_website';
+    ctx.reply("🌐 URL Website? Kirim link atau ketik '-' untuk kosong:");
+  } else if (step === 'awaiting_website') {
+    ctx.session.tokenConfig.website = text === '-' ? '' : text;
+    ctx.session.step = 'awaiting_twitter';
+    ctx.reply("🐦 URL Twitter/X? Kirim link atau ketik '-' untuk kosong:");
+  } else if (step === 'awaiting_twitter') {
+    ctx.session.tokenConfig.twitter = text === '-' ? '' : text;
+    ctx.session.step = 'awaiting_telegram';
+    ctx.reply("✈️ URL Telegram? Kirim link atau ketik '-' untuk kosong:");
+  } else if (step === 'awaiting_telegram') {
+    ctx.session.tokenConfig.telegram = text === '-' ? '' : text;
     ctx.session.step = 'awaiting_feewallet';
     ctx.reply("👛 Wallet Recipient (Penerima Dev Fee)? Kirim alamat 0x... atau ketik '-' untuk pakai wallet launcher.");
   } else if (step === 'awaiting_feewallet') {
@@ -170,6 +182,7 @@ function showLaunchConfirmation(ctx) {
     `Symbol: ${cfg.symbol}\n` +
     `Deskripsi: ${cfg.description || '-'}\n` +
     `Logo: ${cfg.imageUrl || '-'}\n` +
+    `Website: ${cfg.website || '-'} | X: ${cfg.twitter || '-'} | TG: ${cfg.telegram || '-'}\n` +
     `Initial Buy: ${cfg.initialBuy} ETH\n` +
     `Recipient (Dev Fee): \`${cfg.feeWallet}\`\n\n` +
     `⚠️ Pastikan saldo FUND dan LAUNCH mencukupi.\n` +
@@ -207,8 +220,11 @@ async function startLaunchProcess(ctx) {
     if (status.tokenAddress) text += `\n🎉 *Sukses!* Token Address: \`${status.tokenAddress}\`\n`;
     if (status.error) text += `\n❌ Error: ${status.error}\n`;
 
+    const isDone = status.status === 'SUCCESS' || status.status === 'FAILED';
+    const extraMenu = isDone ? Markup.inlineKeyboard([[Markup.button.callback('🚀 LAUNCH ULANG DATA SAMA', 'do_launch')]]) : Markup.inlineKeyboard([]);
+
     try {
-      await ctx.telegram.editMessageText(ctx.chat.id, launchMessageId, null, text, { parse_mode: 'Markdown', disable_web_page_preview: true });
+      await ctx.telegram.editMessageText(ctx.chat.id, launchMessageId, null, text, { parse_mode: 'Markdown', disable_web_page_preview: true, ...extraMenu });
     } catch (e) {
       // Abaikan error edit jika pesan sama persis
     }
