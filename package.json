@@ -1,18 +1,15 @@
 {
-  "name": "launch-bot",
-  "version": "2.1.0",
-  "description": "Telegram bot: launch token di pons v2 (Robinhood Chain) & Argus (Arc) + dev buy",
+  "name": "pons-launcher-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot untuk launch token di Pons (Robinhood Chain) dengan teknik ATOMIC TRANSACTION BUNDLING.",
+  "main": "index.js",
   "type": "module",
-  "engines": { "node": ">=20" },
   "scripts": {
-    "start": "node src/index.js",
-    "check": "node scripts/check.js",
-    "test": "node --test \"test/**/*.test.js\"",
-    "build:miner": "node scripts/build-miner.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
-    "ethers": "^6.13.2",
-    "grammy": "^1.30.0"
+    "telegraf": "^4.16.3",
+    "viem": "^2.9.15"
   }
 }
