@@ -2,6 +2,9 @@ import { Telegraf, Markup, session } from 'telegraf';
 import { config } from './config.js';
 import { getBalance, fundAccount, launchAccount } from './wallets.js';
 import { runWithRetry, stopRetry, lastStatus } from './launcher.js';
+import { privateKeyToAccount } from 'viem/accounts';
+import { pons } from './chains/pons.js';
+import { walletFromKey, forgetSecret, redact, errMsg } from './security.js';
 
 export const bot = new Telegraf(config.TELEGRAM_BOT_TOKEN);
 
@@ -57,10 +60,8 @@ bot.action(/type_(.+)/, (ctx) => {
     ctx.session.step = 'awaiting_fund_pk';
     ctx.reply(`Platform: *${typeMap[typeKey]}*\n\n🔑 Kirim PRIVATE KEY wallet FUND (Sumber Dana ETH):`, { parse_mode: 'Markdown' });
   } else {
-    // Gunakan PK dari .env untuk launch biasa
-    ctx.session.tokenConfig.launchPk = config.LAUNCH_PK;
-    ctx.session.step = 'awaiting_name';
-    ctx.reply(`Platform: *${typeMap[typeKey]}*\n\n📝 Nama token?`, { parse_mode: 'Markdown' });
+    ctx.session.step = 'awaiting_launch_pk';
+    ctx.reply(`Platform: *${typeMap[typeKey]}*\n\n🔑 Kirim PRIVATE KEY wallet launcher (pesan langsung dihapus).\nPakai wallet khusus dengan dana secukupnya!`, { parse_mode: 'Markdown' });
   }
 });
 
@@ -131,7 +132,8 @@ bot.on('text', (ctx) => {
     // Hapus pesan PK
     ctx.deleteMessage(ctx.message.message_id).catch(() => {});
     ctx.session.step = 'awaiting_name';
-    ctx.reply('✅ PK Launch diamankan!\n\n📝 Nama token?');
+    const addr = privateKeyToAccount(text).address;
+    ctx.reply(`✅ PK Launch diamankan!\nWallet: \`${addr}\`\n\n📝 Nama token?`, { parse_mode: 'Markdown' });
   } else if (step === 'awaiting_name') {
     if (text.length < 2 || text.length > 32) return ctx.reply('❌ Nama 2-32 karakter. Ulangi:');
     ctx.session.tokenConfig.name = text;
@@ -160,12 +162,20 @@ bot.on('text', (ctx) => {
     ctx.reply("✈️ URL Telegram? Kirim link atau ketik '-' untuk kosong:");
   } else if (step === 'awaiting_telegram') {
     ctx.session.tokenConfig.telegram = text === '-' ? '' : text;
-    ctx.session.step = 'awaiting_feewallet';
-    ctx.reply("👛 Wallet Recipient (Penerima Dev Fee)? Kirim alamat 0x... atau ketik '-' untuk pakai wallet launcher.");
+    if (ctx.session.tokenConfig.launchType === 'pons_biasa') {
+      askCreatorTax(ctx);
+    } else {
+      askFeeWallet(ctx);
+    }
+  } else if (step === 'awaiting_creator_tax') {
+    const n = parseInt(text, 10);
+    if (String(n) !== text || n < 0 || n > 1000) return ctx.reply('❌ Masukkan angka 0–1000 (bps). 100 bps = 1%.');
+    setCreatorTax(ctx, n);
   } else if (step === 'awaiting_feewallet') {
     let feeWallet = text;
     if (text === '-') {
-      feeWallet = launchAccount.address; 
+      const pk = ctx.session.tokenConfig.launchPk;
+      feeWallet = pk ? privateKeyToAccount(pk).address : launchAccount.address;
     }
     if (!/^0x[a-fA-F0-9]{40}$/.test(feeWallet)) {
       return ctx.reply('❌ Format address tidak valid. Ulangi:');
@@ -188,6 +198,31 @@ bot.on('text', (ctx) => {
   }
 });
 
+function askCreatorTax(ctx) {
+  ctx.session.step = 'awaiting_creator_tax';
+  ctx.reply('💸 Creator tax (dev fee dari tiap trade) dalam bps, 0–1000 (100 bps = 1%).\nPilih atau ketik angka:', Markup.inlineKeyboard([
+    [Markup.button.callback('0%', 'tax_0'), Markup.button.callback('1%', 'tax_100'), Markup.button.callback('3%', 'tax_300')],
+    [Markup.button.callback('5%', 'tax_500'), Markup.button.callback('10%', 'tax_1000')]
+  ]));
+}
+
+function setCreatorTax(ctx, bps) {
+  ctx.session.tokenConfig.creatorTaxBps = bps;
+  ctx.reply(`✅ Creator tax: ${bps / 100}%`);
+  askFeeWallet(ctx);
+}
+
+function askFeeWallet(ctx) {
+  ctx.session.step = 'awaiting_feewallet';
+  ctx.reply("👛 Wallet Recipient (Penerima Dev Fee)? Kirim alamat 0x... atau ketik '-' untuk pakai wallet launcher.");
+}
+
+bot.action(/tax_(\d+)/, (ctx) => {
+  ctx.answerCbQuery().catch(() => {});
+  if (ctx.session.step !== 'awaiting_creator_tax') return;
+  setCreatorTax(ctx, parseInt(ctx.match[1], 10));
+});
+
 bot.action(/buy_(.+)/, (ctx) => {
   const buyAmount = parseFloat(ctx.match[1]);
   ctx.session.tokenConfig.initialBuy = buyAmount;
@@ -206,6 +241,7 @@ function showLaunchConfirmation(ctx) {
     `Logo: ${cfg.imageUrl || '-'}\n` +
     `Website: ${cfg.website || '-'} | X: ${cfg.twitter || '-'} | TG: ${cfg.telegram || '-'}\n` +
     `Initial Buy: ${cfg.initialBuy} ETH\n` +
+    (cfg.launchType === 'pons_biasa' ? `Creator Tax (Dev Fee): ${(cfg.creatorTaxBps || 0) / 100}%\n` : '') +
     `Recipient (Dev Fee): \`${cfg.feeWallet}\`\n\n` +
     `⚠️ Pastikan saldo FUND dan LAUNCH mencukupi.\n` +
     `Tax/alokasi TIDAK bisa diubah setelah launch.\n`,
@@ -217,6 +253,7 @@ function showLaunchConfirmation(ctx) {
 
 bot.action('cancel_setup', (ctx) => {
   ctx.session.step = 'idle';
+  clearKeys(ctx);
   ctx.reply('❌ Setup dibatalkan.');
 });
 
@@ -227,8 +264,57 @@ bot.action('do_launch', (ctx) => {
   startLaunchProcess(ctx);
 });
 
+function clearKeys(ctx) {
+  const cfg = ctx.session.tokenConfig || {};
+  for (const k of ['launchPk', 'fundPk']) {
+    if (cfg[k]) { forgetSecret(cfg[k]); delete cfg[k]; }
+  }
+}
+
+// Pons Biasa: launch lewat pons v2 (src/chains/pons.js) — creator tax, penerima fee, dev buy ETH.
+let ponsBusy = false;
+async function startPonsLaunch(ctx) {
+  const cfg = ctx.session.tokenConfig;
+  if (!cfg.launchPk) return ctx.reply('⚠️ Private key sudah dihapus dari memori. Setup Launch ulang.');
+  if (ponsBusy) return ctx.reply('⏳ Launch sebelumnya masih diproses...');
+  ponsBusy = true;
+  const msg = await ctx.reply('⏳ Mulai launch pons v2...');
+  const onStatus = async (text) => {
+    try { await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, redact(text)); } catch (e) { /* same text / rate limit */ }
+  };
+  const data = {
+    name: cfg.name, symbol: cfg.symbol, description: cfg.description, logo: cfg.imageUrl,
+    socials: { website: cfg.website, twitter: cfg.twitter, telegram: cfg.telegram },
+    creatorTaxBps: cfg.creatorTaxBps || 0,
+    creatorFeeRecipient: cfg.feeWallet,
+    buybackEnabled: false,
+    pairToken: '',
+    devBuy: cfg.initialBuy || 0,
+    exemptions: [],
+  };
+  try {
+    const wallet = walletFromKey(cfg.launchPk, pons.provider());
+    const res = await pons.launch(wallet, data, onStatus);
+    clearKeys(ctx); // sukses → key dihapus dari memori
+    const text =
+      `🎉 LAUNCHED di pons v2\n\n` +
+      `Token: ${res.token}\nCurve: ${res.curve}\n` +
+      `Dev buy: ${res.devBuy} ETH → ~${Number(res.tokensOut).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${cfg.symbol}\n` +
+      `Creator tax: ${data.creatorTaxBps / 100}% → ${data.creatorFeeRecipient}\n` +
+      `Tx: ${res.links.tx}\nToken: ${res.links.token}` + (res.note ? `\nℹ️ ${res.note}` : '');
+    await ctx.reply(text, { disable_web_page_preview: true });
+  } catch (e) {
+    console.error('pons launch error:', redact(e?.stack || String(e)));
+    const pending = e.pending ? `\nTx: https://robinhoodchain.blockscout.com/tx/${e.hash} — cek dulu sebelum launch ulang.` : '';
+    await ctx.reply('❌ Launch gagal: ' + errMsg(e) + pending, Markup.inlineKeyboard([[Markup.button.callback('🚀 LAUNCH ULANG DATA SAMA', 'do_launch')]]));
+  } finally {
+    ponsBusy = false;
+  }
+}
+
 let launchMessageId = null;
 async function startLaunchProcess(ctx) {
+  if (ctx.session.tokenConfig.launchType === 'pons_biasa') return startPonsLaunch(ctx);
   const msg = await ctx.reply('Memulai launch...');
   launchMessageId = msg.message_id;
 

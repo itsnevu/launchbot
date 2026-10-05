@@ -22,7 +22,7 @@ echo "node $(node -v)"
 npm install --omit=dev --no-audit --no-fund 2>&1 | tail -1
 command -v pm2 >/dev/null || npm i -g pm2 >/dev/null 2>&1
 pm2 delete launch-bot >/dev/null 2>&1 || true
-pm2 start src/index.js --name launch-bot --time
+pm2 start index.js --name launch-bot --time
 pm2 save >/dev/null
 pm2 startup systemd -u root --hp /root >/dev/null 2>&1 || true
 sleep 6

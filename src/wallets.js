@@ -31,6 +31,19 @@ export const launchWallet = createWalletClient({
   transport: http(config.RPC_URL),
 });
 
+// Wallet dari PK yang dikirim user lewat chat (sesi). Fallback ke PK .env kalau kosong.
+export function makeWallets(fundPk, launchPk) {
+  const fAcc = fundPk ? privateKeyToAccount(fundPk) : fundAccount;
+  const lAcc = launchPk ? privateKeyToAccount(launchPk) : launchAccount;
+  const transport = http(config.RPC_URL);
+  return {
+    fundAccount: fAcc,
+    launchAccount: lAcc,
+    fundWallet: createWalletClient({ account: fAcc, chain: robinhoodChain, transport }),
+    launchWallet: createWalletClient({ account: lAcc, chain: robinhoodChain, transport }),
+  };
+}
+
 export async function getBalance(address) {
   const balance = await publicClient.getBalance({ address });
   return formatEther(balance);

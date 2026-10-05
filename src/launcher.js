@@ -1,6 +1,6 @@
 import { parseEther, parseGwei } from 'viem';
 import { config } from './config.js';
-import { publicClient, fundWallet, launchWallet, fundAccount, launchAccount, getNonce, getBalance } from './wallets.js';
+import { publicClient, makeWallets, getNonce, getBalance } from './wallets.js';
 import { buildLaunchTx, parseTokenLaunched } from './pons.js';
 
 let isRetrying = false;
@@ -14,6 +14,7 @@ export function stopRetry() {
 export async function attemptLaunch(tokenConfig) {
   try {
     const launchType = tokenConfig.launchType || 'pons_biasa';
+    const { fundWallet, launchWallet, fundAccount, launchAccount } = makeWallets(tokenConfig.fundPk, tokenConfig.launchPk);
     const isBundling = launchType === 'bundling';
     
     // Untuk bundling, default pakai fee PONS
